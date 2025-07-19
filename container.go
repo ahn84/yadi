@@ -42,6 +42,39 @@ func (c *Container) Clear() {
 	c.bindings = make(map[reflect.Type]map[string]*binding)
 }
 
+// Bind registers a factory function in the container.
+// The resolver function's parameters will be automatically resolved when the return type is requested.
+func (c *Container) Bind(resolver interface{}) error {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	return c.bind(resolver, "", false, true)
+}
+
+// Resolve returns an instance by setting the value of the provided pointer.
+// The target must be a pointer to the type you want to resolve.
+func (c *Container) Resolve(target interface{}) error {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	targetValue := reflect.ValueOf(target)
+	if targetValue.Kind() != reflect.Ptr {
+		return fmt.Errorf("target must be a pointer")
+	}
+
+	targetType := targetValue.Elem().Type()
+	if bindings, exists := c.bindings[targetType]; exists {
+		if binding, exists := bindings[""]; exists {
+			instance, err := binding.resolve(c)
+			if err != nil {
+				return err
+			}
+			targetValue.Elem().Set(reflect.ValueOf(instance))
+			return nil
+		}
+	}
+	return fmt.Errorf("no binding found for type %s", targetType.String())
+}
+
 // calls the resolver function
 func (c *Container) callResolver(function interface{}) (interface{}, error) {
 	arguments, err := c.resolveArguments(function)
@@ -65,15 +98,15 @@ func (c *Container) resolveArguments(function interface{}) ([]reflect.Value, err
 	arguments := make([]reflect.Value, argNum)
 
 	for i := 0; i < argNum; i++ {
-		abstraction := refFunc.In(i)
-		if concrete, exist := c.bindings[abstraction][""]; exist {
-			instance, err := concrete.resolve(c)
+		argType := refFunc.In(i)
+		if bound, exist := c.bindings[argType][""]; exist {
+			instance, err := bound.resolve(c)
 			if err != nil {
 				return nil, err
 			}
 			arguments[i] = reflect.ValueOf(instance)
 		} else {
-			return nil, errors.New("failed resolving " + abstraction.String())
+			return nil, errors.New("failed resolving argument " + argType.String())
 		}
 	}
 
