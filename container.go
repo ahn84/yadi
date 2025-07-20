@@ -7,11 +7,55 @@ import (
 	"sync"
 )
 
+// BindOption represents a configuration option for binding
+type BindOption func(*bindConfig)
+
+// bindConfig holds the configuration for a binding
+type bindConfig struct {
+	name      string
+	singleton bool
+	lazy      bool
+}
+
+// WithName sets a name for the binding, allowing multiple implementations of the same interface
+func WithName(name string) BindOption {
+	return func(config *bindConfig) {
+		config.name = name
+	}
+}
+
+// WithSingleton makes the binding a singleton (same instance returned on every resolve)
+func WithSingleton() BindOption {
+	return func(config *bindConfig) {
+		config.singleton = true
+	}
+}
+
+// WithTransient makes the binding transient (new instance on every resolve) - this is the default
+func WithTransient() BindOption {
+	return func(config *bindConfig) {
+		config.singleton = false
+	}
+}
+
+// WithLazy makes the binding lazy (instance created only when first requested) - this is the default
+func WithLazy() BindOption {
+	return func(config *bindConfig) {
+		config.lazy = true
+	}
+}
+
+// WithEager makes the binding eager (instance created immediately during binding)
+func WithEager() BindOption {
+	return func(config *bindConfig) {
+		config.lazy = false
+	}
+}
+
 type binding struct {
-	resolver  any    // factory function or value
-	concrete  any    // concrete type
-	singleton bool   // whether the binding is a singleton
-	scope     string // binding scope
+	resolver  any  // factory function or value
+	concrete  any  // concrete type
+	singleton bool // whether the binding is a singleton
 }
 
 func (b *binding) resolve(c *Container) (any, error) {
@@ -44,15 +88,34 @@ func (c *Container) Clear() {
 
 // Bind registers a factory function in the container.
 // The resolver function's parameters will be automatically resolved when the return type is requested.
-func (c *Container) Bind(resolver interface{}) error {
+func (c *Container) Bind(resolver interface{}, options ...BindOption) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
-	return c.bind(resolver, "", false, true)
+
+	// Apply default configuration
+	config := &bindConfig{
+		name:      "",
+		singleton: false,
+		lazy:      true,
+	}
+
+	// Apply provided options
+	for _, option := range options {
+		option(config)
+	}
+
+	return c.bind(resolver, config.name, config.singleton, config.lazy)
 }
 
 // Resolve returns an instance by setting the value of the provided pointer.
 // The target must be a pointer to the type you want to resolve.
 func (c *Container) Resolve(target interface{}) error {
+	return c.ResolveNamed(target, "")
+}
+
+// ResolveNamed returns a named instance by setting the value of the provided pointer.
+// The target must be a pointer to the type you want to resolve.
+func (c *Container) ResolveNamed(target interface{}, name string) error {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
@@ -63,7 +126,7 @@ func (c *Container) Resolve(target interface{}) error {
 
 	targetType := targetValue.Elem().Type()
 	if bindings, exists := c.bindings[targetType]; exists {
-		if binding, exists := bindings[""]; exists {
+		if binding, exists := bindings[name]; exists {
 			instance, err := binding.resolve(c)
 			if err != nil {
 				return err
@@ -72,7 +135,25 @@ func (c *Container) Resolve(target interface{}) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("no binding found for type %s", targetType.String())
+	return fmt.Errorf("no binding found for type %s with name '%s'", targetType.String(), name)
+}
+
+// BindSingleton is a convenience method for binding a singleton
+func (c *Container) BindSingleton(resolver interface{}, options ...BindOption) error {
+	allOptions := append([]BindOption{WithSingleton()}, options...)
+	return c.Bind(resolver, allOptions...)
+}
+
+// BindNamed is a convenience method for binding with a name
+func (c *Container) BindNamed(name string, resolver interface{}, options ...BindOption) error {
+	allOptions := append([]BindOption{WithName(name)}, options...)
+	return c.Bind(resolver, allOptions...)
+}
+
+// BindNamedSingleton is a convenience method for binding a named singleton
+func (c *Container) BindNamedSingleton(name string, resolver interface{}, options ...BindOption) error {
+	allOptions := append([]BindOption{WithName(name), WithSingleton()}, options...)
+	return c.Bind(resolver, allOptions...)
 }
 
 // calls the resolver function

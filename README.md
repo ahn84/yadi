@@ -79,41 +79,92 @@ func main() {
 
 ### Core Methods
 
-#### `Bind(resolver interface{}) error`
+#### `Bind(resolver interface{}, options ...BindOption) error`
 
-Registers a factory function. The return type is automatically detected from the function signature.
+Registers a factory function. The return type is automatically detected from the function signature. Supports various options for configuration.
 
 ```go
-// Simple binding
+// Simple binding (transient by default)
 err := container.Bind(func() Database {
     return &postgresDB{}
 })
+
+// Singleton binding
+err := container.Bind(func() Database {
+    return &postgresDB{}
+}, WithSingleton())
+
+// Named binding
+err := container.Bind(func() Database {
+    return &postgresDB{}
+}, WithName("primary"))
+
+// Named singleton with eager initialization
+err := container.Bind(func() Database {
+    return &postgresDB{}
+}, WithName("cache"), WithSingleton(), WithEager())
 
 // Binding with dependencies (automatically resolved)
 err := container.Bind(func(db Database, logger Logger) UserService {
     return &userService{db: db, logger: logger}
 })
-
-// Binding with error handling
-err := container.Bind(func() (Database, error) {
-    db := &postgresDB{}
-    if err := db.Connect(); err != nil {
-        return nil, err
-    }
-    return db, nil
-})
 ```
+
+**Available Options:**
+- `WithSingleton()` - Creates a singleton (same instance returned every time)
+- `WithTransient()` - Creates transient instances (new instance every time) - default
+- `WithName(string)` - Names the binding for multiple implementations
+- `WithEager()` - Creates instance immediately during binding
+- `WithLazy()` - Creates instance only when first requested - default
 
 #### `Resolve(target interface{}) error`
 
-Resolves a dependency into the provided pointer, automatically resolving all dependencies.
+Resolves a dependency into the provided pointer.
 
 ```go
 var userService UserService
 err := container.Resolve(&userService)
-if err != nil {
-    // Handle resolution error
-}
+```
+
+#### `ResolveNamed(target interface{}, name string) error`
+
+Resolves a named dependency into the provided pointer.
+
+```go
+var redisCache Cache
+err := container.ResolveNamed(&redisCache, "redis")
+```
+
+### Convenience Methods
+
+#### `BindSingleton(resolver interface{}, options ...BindOption) error`
+
+Shorthand for binding a singleton.
+
+```go
+err := container.BindSingleton(func() Database {
+    return &postgresDB{}
+})
+```
+
+#### `BindNamed(name string, resolver interface{}, options ...BindOption) error`
+
+Shorthand for named binding.
+
+```go
+err := container.BindNamed("redis", func() Cache {
+    return &redisCache{}
+})
+```
+
+#### `BindNamedSingleton(name string, resolver interface{}, options ...BindOption) error`
+
+Shorthand for named singleton binding.
+
+```go
+err := container.BindNamedSingleton("database", func() Database {
+    return &postgresDB{}
+})
 ```
 
 ### Container Methods
@@ -135,6 +186,54 @@ container.Clear()
 ```
 
 ## Advanced Usage
+
+### Multiple Implementations with Named Bindings
+
+```go
+// Bind different cache implementations
+container.BindNamed("redis", func() Cache {
+    return &redisCache{}
+})
+
+container.BindNamed("memory", func() Cache {
+    return &memoryCache{}
+})
+
+// Resolve specific implementation
+var redisCache Cache
+err := container.ResolveNamed(&redisCache, "redis")
+
+var memoryCache Cache
+err = container.ResolveNamed(&memoryCache, "memory")
+```
+
+### Singleton vs Transient
+
+```go
+// Singleton - same instance shared
+container.BindSingleton(func() Database {
+    return &expensiveDB{} // Created once, reused
+})
+
+// Transient - new instance each time (default)
+container.Bind(func() RequestHandler {
+    return &handler{} // New instance per request
+})
+```
+
+### Eager vs Lazy Initialization
+
+```go
+// Eager - create immediately during binding
+container.Bind(func() HealthChecker {
+    return &healthChecker{}
+}, WithSingleton(), WithEager())
+
+// Lazy - create when first requested (default)
+container.Bind(func() HeavyService {
+    return &heavyService{} // Only created if/when needed
+}, WithSingleton(), WithLazy())
+```
 
 ### Complex Dependency Chains
 

@@ -181,6 +181,302 @@ func TestContainer_Bind(t *testing.T) {
 	})
 }
 
+func TestContainer_BindWithOptions(t *testing.T) {
+	t.Run("bind with singleton option", func(t *testing.T) {
+		container := New()
+
+		err := container.Bind(func() Database {
+			return &mockDatabase{}
+		}, WithSingleton())
+
+		require.NoError(t, err)
+
+		var db1, db2 Database
+		err = container.Resolve(&db1)
+		require.NoError(t, err)
+
+		err = container.Resolve(&db2)
+		require.NoError(t, err)
+
+		// Should be the same instance for singletons
+		assert.Same(t, db1, db2)
+	})
+
+	t.Run("bind with name option", func(t *testing.T) {
+		container := New()
+
+		err := container.Bind(func() Database {
+			return &mockDatabase{connected: false}
+		}, WithName("primary"))
+		require.NoError(t, err)
+
+		err = container.Bind(func() Database {
+			db := &mockDatabase{connected: true}
+			return db
+		}, WithName("secondary"))
+		require.NoError(t, err)
+
+		var primaryDB Database
+		err = container.ResolveNamed(&primaryDB, "primary")
+		require.NoError(t, err)
+
+		var secondaryDB Database
+		err = container.ResolveNamed(&secondaryDB, "secondary")
+		require.NoError(t, err)
+
+		// Should be different instances with different states
+		assert.False(t, primaryDB.(*mockDatabase).connected)
+		assert.True(t, secondaryDB.(*mockDatabase).connected)
+	})
+
+	t.Run("bind with multiple options", func(t *testing.T) {
+		container := New()
+
+		err := container.Bind(func() Database {
+			return &mockDatabase{}
+		}, WithName("cached"), WithSingleton())
+
+		require.NoError(t, err)
+
+		var db1, db2 Database
+		err = container.ResolveNamed(&db1, "cached")
+		require.NoError(t, err)
+
+		err = container.ResolveNamed(&db2, "cached")
+		require.NoError(t, err)
+
+		// Should be the same instance (singleton + named)
+		assert.Same(t, db1, db2)
+	})
+
+	t.Run("bind with eager option", func(t *testing.T) {
+		container := New()
+
+		called := false
+		err := container.Bind(func() Database {
+			called = true
+			return &mockDatabase{}
+		}, WithEager())
+
+		require.NoError(t, err)
+		// Should be called immediately due to eager binding
+		assert.True(t, called)
+	})
+
+	t.Run("bind with lazy option (default)", func(t *testing.T) {
+		container := New()
+
+		called := false
+		err := container.Bind(func() Database {
+			called = true
+			return &mockDatabase{}
+		}, WithLazy())
+
+		require.NoError(t, err)
+		// Should not be called yet due to lazy binding
+		assert.False(t, called)
+
+		var db Database
+		err = container.Resolve(&db)
+		require.NoError(t, err)
+		// Now it should be called
+		assert.True(t, called)
+	})
+}
+
+func TestContainer_ConvenienceMethods(t *testing.T) {
+	t.Run("BindSingleton", func(t *testing.T) {
+		container := New()
+
+		err := container.BindSingleton(func() Database {
+			return &mockDatabase{}
+		})
+		require.NoError(t, err)
+
+		var db1, db2 Database
+		err = container.Resolve(&db1)
+		require.NoError(t, err)
+
+		err = container.Resolve(&db2)
+		require.NoError(t, err)
+
+		assert.Same(t, db1, db2)
+	})
+
+	t.Run("BindNamed", func(t *testing.T) {
+		container := New()
+
+		err := container.BindNamed("test", func() Database {
+			return &mockDatabase{}
+		})
+		require.NoError(t, err)
+
+		var db Database
+		err = container.ResolveNamed(&db, "test")
+		require.NoError(t, err)
+		assert.NotNil(t, db)
+	})
+
+	t.Run("BindNamedSingleton", func(t *testing.T) {
+		container := New()
+
+		err := container.BindNamedSingleton("singleton-test", func() Database {
+			return &mockDatabase{}
+		})
+		require.NoError(t, err)
+
+		var db1, db2 Database
+		err = container.ResolveNamed(&db1, "singleton-test")
+		require.NoError(t, err)
+
+		err = container.ResolveNamed(&db2, "singleton-test")
+		require.NoError(t, err)
+
+		assert.Same(t, db1, db2)
+	})
+
+	t.Run("convenience methods with additional options", func(t *testing.T) {
+		container := New()
+
+		called := false
+		err := container.BindSingleton(func() Database {
+			called = true
+			return &mockDatabase{}
+		}, WithEager())
+		require.NoError(t, err)
+
+		// Should be called immediately (eager) and be singleton
+		assert.True(t, called)
+
+		var db1, db2 Database
+		err = container.Resolve(&db1)
+		require.NoError(t, err)
+
+		err = container.Resolve(&db2)
+		require.NoError(t, err)
+
+		assert.Same(t, db1, db2)
+	})
+}
+
+func TestContainer_NamedResolution(t *testing.T) {
+	t.Run("resolve named binding", func(t *testing.T) {
+		container := New()
+
+		// Bind multiple implementations of the same interface
+		err := container.BindNamed("redis", func() Logger {
+			return &loggerImpl{messages: []string{"redis"}}
+		})
+		require.NoError(t, err)
+
+		err = container.BindNamed("file", func() Logger {
+			return &loggerImpl{messages: []string{"file"}}
+		})
+		require.NoError(t, err)
+
+		var redisLogger Logger
+		err = container.ResolveNamed(&redisLogger, "redis")
+		require.NoError(t, err)
+
+		var fileLogger Logger
+		err = container.ResolveNamed(&fileLogger, "file")
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{"redis"}, redisLogger.(*loggerImpl).messages)
+		assert.Equal(t, []string{"file"}, fileLogger.(*loggerImpl).messages)
+	})
+
+	t.Run("error when named binding not found", func(t *testing.T) {
+		container := New()
+
+		var logger Logger
+		err := container.ResolveNamed(&logger, "nonexistent")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no binding found for type")
+		assert.Contains(t, err.Error(), "with name 'nonexistent'")
+	})
+
+	t.Run("resolve default binding when name is empty", func(t *testing.T) {
+		container := New()
+
+		err := container.Bind(func() Database {
+			return &mockDatabase{}
+		})
+		require.NoError(t, err)
+
+		var db Database
+		err = container.ResolveNamed(&db, "")
+		require.NoError(t, err)
+		assert.NotNil(t, db)
+	})
+}
+
+func TestContainer_SingletonBehavior(t *testing.T) {
+	t.Run("singleton instances are same", func(t *testing.T) {
+		container := New()
+
+		err := container.BindSingleton(func() Database {
+			return &mockDatabase{}
+		})
+		require.NoError(t, err)
+
+		var db1, db2 Database
+		err = container.Resolve(&db1)
+		require.NoError(t, err)
+
+		err = container.Resolve(&db2)
+		require.NoError(t, err)
+
+		assert.Same(t, db1, db2)
+	})
+
+	t.Run("transient instances are different", func(t *testing.T) {
+		container := New()
+
+		err := container.Bind(func() Database {
+			return &mockDatabase{}
+		}, WithTransient()) // Explicit transient
+		require.NoError(t, err)
+
+		var db1, db2 Database
+		err = container.Resolve(&db1)
+		require.NoError(t, err)
+
+		err = container.Resolve(&db2)
+		require.NoError(t, err)
+
+		assert.NotSame(t, db1, db2)
+	})
+
+	t.Run("singleton with dependencies", func(t *testing.T) {
+		container := New()
+
+		// Bind dependency as singleton
+		err := container.BindSingleton(func() Database {
+			return &mockDatabase{}
+		})
+		require.NoError(t, err)
+
+		// Bind service that depends on singleton database
+		err = container.Bind(func(db Database) UserService {
+			return &userServiceImpl{db: db}
+		})
+		require.NoError(t, err)
+
+		var svc1, svc2 UserService
+		err = container.Resolve(&svc1)
+		require.NoError(t, err)
+
+		err = container.Resolve(&svc2)
+		require.NoError(t, err)
+
+		// Services should be different but should share the same database instance
+		assert.NotSame(t, svc1, svc2)
+		assert.Same(t, svc1.(*userServiceImpl).db, svc2.(*userServiceImpl).db)
+	})
+}
+
 func TestContainer_Resolve(t *testing.T) {
 	t.Run("resolve simple binding", func(t *testing.T) {
 		container := New()
@@ -323,7 +619,7 @@ func TestContainer_Resolve(t *testing.T) {
 }
 
 func TestContainer_TransientInstances(t *testing.T) {
-	t.Run("transient instances are different", func(t *testing.T) {
+	t.Run("transient instances are different by default", func(t *testing.T) {
 		container := New()
 
 		err := container.Bind(func() Database {
@@ -338,7 +634,7 @@ func TestContainer_TransientInstances(t *testing.T) {
 		err = container.Resolve(&db2)
 		require.NoError(t, err)
 
-		// Should be different instances
+		// Should be different instances by default (transient)
 		assert.NotSame(t, db1, db2)
 	})
 }
