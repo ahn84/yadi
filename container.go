@@ -141,6 +141,8 @@ func (c *Container) ResolveNamed(target interface{}, name string) error {
 	}
 
 	targetType := targetValue.Elem().Type()
+
+	// Try to find a binding for the target type directly.
 	if bindings, exists := c.bindings[targetType]; exists {
 		if binding, exists := bindings[name]; exists {
 			instance, err := binding.resolve(c)
@@ -151,6 +153,24 @@ func (c *Container) ResolveNamed(target interface{}, name string) error {
 			return nil
 		}
 	}
+
+	// If the target is a struct, and we didn't find a binding,
+	// try to find a binding for a pointer to the target type.
+	if targetType.Kind() == reflect.Struct {
+		ptrType := reflect.PtrTo(targetType)
+		if bindings, exists := c.bindings[ptrType]; exists {
+			if binding, exists := bindings[name]; exists {
+				instance, err := binding.resolve(c)
+				if err != nil {
+					return err
+				}
+				// instance is a pointer, so we dereference it.
+				targetValue.Elem().Set(reflect.ValueOf(instance).Elem())
+				return nil
+			}
+		}
+	}
+
 	return fmt.Errorf("no binding found for type %s with name '%s'", targetType.String(), name)
 }
 
@@ -226,6 +246,14 @@ func (c *Container) resolveArguments(function interface{}) ([]reflect.Value, err
 
 	for i := 0; i < argNum; i++ {
 		argType := refFunc.In(i)
+
+		if isLazy(argType) {
+			lazyValue := reflect.New(argType).Elem()
+			lazyValue.FieldByName("Container").Set(reflect.ValueOf(c))
+			arguments[i] = lazyValue
+			continue
+		}
+
 		if bound, exist := c.bindings[argType][""]; exist {
 			instance, err := bound.resolve(c)
 			if err != nil {
