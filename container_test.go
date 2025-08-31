@@ -8,60 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Test interfaces and structs
-type Database interface {
-	Connect() error
-}
 
-type UserService interface {
-	GetUser(id int) string
-}
-
-type Logger interface {
-	Log(message string)
-}
-
-type mockDatabase struct {
-	connected bool
-}
-
-func (m *mockDatabase) Connect() error {
-	m.connected = true
-	return nil
-}
-
-type userServiceImpl struct {
-	db Database
-}
-
-func (u *userServiceImpl) GetUser(id int) string {
-	return "user"
-}
-
-type loggerImpl struct {
-	messages []string
-}
-
-func (l *loggerImpl) Log(message string) {
-	l.messages = append(l.messages, message)
-}
-
-// Complex service with multiple dependencies
-type OrderService interface {
-	CreateOrder(userID int) string
-}
-
-type orderServiceImpl struct {
-	userService UserService
-	db          Database
-	logger      Logger
-}
-
-func (o *orderServiceImpl) CreateOrder(userID int) string {
-	o.logger.Log("Creating order")
-	user := o.userService.GetUser(userID)
-	return "order for " + user
-}
 
 func TestContainer_New(t *testing.T) {
 	container := New()
@@ -182,12 +129,12 @@ func TestContainer_Bind(t *testing.T) {
 }
 
 func TestContainer_BindWithOptions(t *testing.T) {
-	t.Run("bind with singleton option", func(t *testing.T) {
+	t.Run("bind with explicit singleton option", func(t *testing.T) {
 		container := New()
 
 		err := container.Bind(func() Database {
 			return &mockDatabase{}
-		}, WithSingleton())
+		}, WithSingleton()) // Explicit singleton (redundant but allowed)
 
 		require.NoError(t, err)
 
@@ -234,7 +181,7 @@ func TestContainer_BindWithOptions(t *testing.T) {
 
 		err := container.Bind(func() Database {
 			return &mockDatabase{}
-		}, WithName("cached"), WithSingleton())
+		}, WithName("cached")) // Singleton by default + named
 
 		require.NoError(t, err)
 
@@ -285,10 +232,10 @@ func TestContainer_BindWithOptions(t *testing.T) {
 }
 
 func TestContainer_ConvenienceMethods(t *testing.T) {
-	t.Run("BindSingleton", func(t *testing.T) {
+	t.Run("BindTransient", func(t *testing.T) {
 		container := New()
 
-		err := container.BindSingleton(func() Database {
+		err := container.BindTransient(func() Database {
 			return &mockDatabase{}
 		})
 		require.NoError(t, err)
@@ -300,7 +247,7 @@ func TestContainer_ConvenienceMethods(t *testing.T) {
 		err = container.Resolve(&db2)
 		require.NoError(t, err)
 
-		assert.Same(t, db1, db2)
+		assert.NotSame(t, db1, db2)
 	})
 
 	t.Run("BindNamed", func(t *testing.T) {
@@ -317,35 +264,35 @@ func TestContainer_ConvenienceMethods(t *testing.T) {
 		assert.NotNil(t, db)
 	})
 
-	t.Run("BindNamedSingleton", func(t *testing.T) {
+	t.Run("BindNamedTransient", func(t *testing.T) {
 		container := New()
 
-		err := container.BindNamedSingleton("singleton-test", func() Database {
+		err := container.BindNamedTransient("transient-test", func() Database {
 			return &mockDatabase{}
 		})
 		require.NoError(t, err)
 
 		var db1, db2 Database
-		err = container.ResolveNamed(&db1, "singleton-test")
+		err = container.ResolveNamed(&db1, "transient-test")
 		require.NoError(t, err)
 
-		err = container.ResolveNamed(&db2, "singleton-test")
+		err = container.ResolveNamed(&db2, "transient-test")
 		require.NoError(t, err)
 
-		assert.Same(t, db1, db2)
+		assert.NotSame(t, db1, db2)
 	})
 
 	t.Run("convenience methods with additional options", func(t *testing.T) {
 		container := New()
 
 		called := false
-		err := container.BindSingleton(func() Database {
+		err := container.BindTransient(func() Database {
 			called = true
 			return &mockDatabase{}
 		}, WithEager())
 		require.NoError(t, err)
 
-		// Should be called immediately (eager) and be singleton
+		// Should be called immediately (eager) and be transient
 		assert.True(t, called)
 
 		var db1, db2 Database
@@ -355,7 +302,7 @@ func TestContainer_ConvenienceMethods(t *testing.T) {
 		err = container.Resolve(&db2)
 		require.NoError(t, err)
 
-		assert.Same(t, db1, db2)
+		assert.NotSame(t, db1, db2)
 	})
 }
 
@@ -413,12 +360,12 @@ func TestContainer_NamedResolution(t *testing.T) {
 }
 
 func TestContainer_SingletonBehavior(t *testing.T) {
-	t.Run("singleton instances are same", func(t *testing.T) {
+	t.Run("singleton instances are same by default", func(t *testing.T) {
 		container := New()
 
-		err := container.BindSingleton(func() Database {
+		err := container.Bind(func() Database {
 			return &mockDatabase{}
-		})
+		}) // Singleton by default
 		require.NoError(t, err)
 
 		var db1, db2 Database
@@ -431,7 +378,7 @@ func TestContainer_SingletonBehavior(t *testing.T) {
 		assert.Same(t, db1, db2)
 	})
 
-	t.Run("transient instances are different", func(t *testing.T) {
+	t.Run("transient instances are different with explicit option", func(t *testing.T) {
 		container := New()
 
 		err := container.Bind(func() Database {
@@ -452,13 +399,13 @@ func TestContainer_SingletonBehavior(t *testing.T) {
 	t.Run("singleton with dependencies", func(t *testing.T) {
 		container := New()
 
-		// Bind dependency as singleton
-		err := container.BindSingleton(func() Database {
+		// Bind dependency as singleton (default)
+		err := container.Bind(func() Database {
 			return &mockDatabase{}
 		})
 		require.NoError(t, err)
 
-		// Bind service that depends on singleton database
+		// Bind service that depends on singleton database (also singleton by default)
 		err = container.Bind(func(db Database) UserService {
 			return &userServiceImpl{db: db}
 		})
@@ -471,8 +418,8 @@ func TestContainer_SingletonBehavior(t *testing.T) {
 		err = container.Resolve(&svc2)
 		require.NoError(t, err)
 
-		// Services should be different but should share the same database instance
-		assert.NotSame(t, svc1, svc2)
+		// Services should be the same (singleton) and should share the same database instance
+		assert.Same(t, svc1, svc2)
 		assert.Same(t, svc1.(*userServiceImpl).db, svc2.(*userServiceImpl).db)
 	})
 }
@@ -619,7 +566,7 @@ func TestContainer_Resolve(t *testing.T) {
 }
 
 func TestContainer_TransientInstances(t *testing.T) {
-	t.Run("transient instances are different by default", func(t *testing.T) {
+	t.Run("singleton instances are same by default", func(t *testing.T) {
 		container := New()
 
 		err := container.Bind(func() Database {
@@ -634,8 +581,8 @@ func TestContainer_TransientInstances(t *testing.T) {
 		err = container.Resolve(&db2)
 		require.NoError(t, err)
 
-		// Should be different instances by default (transient)
-		assert.NotSame(t, db1, db2)
+		// Should be the same instance by default (singleton)
+		assert.Same(t, db1, db2)
 	})
 }
 

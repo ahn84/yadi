@@ -24,14 +24,14 @@ func WithName(name string) BindOption {
 	}
 }
 
-// WithSingleton makes the binding a singleton (same instance returned on every resolve)
+// WithSingleton makes the binding a singleton (same instance returned on every resolve) - this is now the default
 func WithSingleton() BindOption {
 	return func(config *bindConfig) {
 		config.singleton = true
 	}
 }
 
-// WithTransient makes the binding transient (new instance on every resolve) - this is the default
+// WithTransient makes the binding transient (new instance on every resolve) - explicit override of singleton default
 func WithTransient() BindOption {
 	return func(config *bindConfig) {
 		config.singleton = false
@@ -53,20 +53,36 @@ func WithEager() BindOption {
 }
 
 type binding struct {
-	resolver  any  // factory function or value
-	concrete  any  // concrete type
-	singleton bool // whether the binding is a singleton
+	resolver  any        // factory function or value
+	concrete  any        // concrete type
+	singleton bool       // whether the binding is a singleton
+	mutex     sync.Mutex // protects concrete for singleton instances
 }
 
 func (b *binding) resolve(c *Container) (any, error) {
-	if b.concrete != nil {
-		return b.concrete, nil
-	}
-	val, err := c.callResolver(b.resolver)
+	// For singleton bindings, use mutex for thread safety
 	if b.singleton {
+		b.mutex.Lock()
+		defer b.mutex.Unlock()
+
+		// Check if we already have a cached instance
+		if b.concrete != nil {
+			return b.concrete, nil
+		}
+
+		// Create the instance
+		val, err := c.callResolver(b.resolver)
+		if err != nil {
+			return nil, err
+		}
+
+		// Cache it for future use
 		b.concrete = val
+		return val, nil
 	}
-	return val, err
+
+	// For transient bindings, just create a new instance each time
+	return c.callResolver(b.resolver)
 }
 
 type Container struct {
@@ -95,7 +111,7 @@ func (c *Container) Bind(resolver interface{}, options ...BindOption) error {
 	// Apply default configuration
 	config := &bindConfig{
 		name:      "",
-		singleton: false,
+		singleton: true,
 		lazy:      true,
 	}
 
@@ -138,9 +154,9 @@ func (c *Container) ResolveNamed(target interface{}, name string) error {
 	return fmt.Errorf("no binding found for type %s with name '%s'", targetType.String(), name)
 }
 
-// BindSingleton is a convenience method for binding a singleton
-func (c *Container) BindSingleton(resolver interface{}, options ...BindOption) error {
-	allOptions := append([]BindOption{WithSingleton()}, options...)
+// BindTransient is a convenience method for binding a transient instance
+func (c *Container) BindTransient(resolver interface{}, options ...BindOption) error {
+	allOptions := append([]BindOption{WithTransient()}, options...)
 	return c.Bind(resolver, allOptions...)
 }
 
@@ -150,9 +166,9 @@ func (c *Container) BindNamed(name string, resolver interface{}, options ...Bind
 	return c.Bind(resolver, allOptions...)
 }
 
-// BindNamedSingleton is a convenience method for binding a named singleton
-func (c *Container) BindNamedSingleton(name string, resolver interface{}, options ...BindOption) error {
-	allOptions := append([]BindOption{WithName(name), WithSingleton()}, options...)
+// BindNamedTransient is a convenience method for binding a named transient instance
+func (c *Container) BindNamedTransient(name string, resolver interface{}, options ...BindOption) error {
+	allOptions := append([]BindOption{WithName(name), WithTransient()}, options...)
 	return c.Bind(resolver, allOptions...)
 }
 

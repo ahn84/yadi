@@ -4,6 +4,7 @@ A modern, type-safe dependency injection library for Go that leverages generics 
 
 ## Features
 
+- ✅ **Singleton-First Design**: Singleton instances by default for better performance and resource management
 - ✅ **Clean API**: Simple, idiomatic Go interface without verbose generics
 - ✅ **Automatic dependency resolution**: No manual wiring required
 - ✅ **Thread-safe**: Concurrent binding and resolution
@@ -53,7 +54,7 @@ func main() {
     // Create container
     container := di.New()
     
-    // Bind dependencies - types inferred from function signatures
+    // Bind dependencies - singleton by default, types inferred from function signatures
     container.Bind(func() Database {
         return &postgresDB{}
     })
@@ -62,7 +63,7 @@ func main() {
         return &userService{db: db}
     })
     
-    // Resolve using pointer
+    // Resolve using pointer - same instances returned every time (singleton)
     var userSvc UserService
     err := container.Resolve(&userSvc)
     if err != nil {
@@ -81,28 +82,33 @@ func main() {
 
 #### `Bind(resolver interface{}, options ...BindOption) error`
 
-Registers a factory function. The return type is automatically detected from the function signature. Supports various options for configuration.
+Registers a factory function. The return type is automatically detected from the function signature. Creates singleton instances by default. Supports various options for configuration.
 
 ```go
-// Simple binding (transient by default)
+// Simple binding (singleton by default)
 err := container.Bind(func() Database {
     return &postgresDB{}
 })
 
-// Singleton binding
+// Explicit singleton binding (redundant but allowed)
 err := container.Bind(func() Database {
     return &postgresDB{}
 }, WithSingleton())
 
-// Named binding
+// Transient binding (explicit override)
+err := container.Bind(func() Database {
+    return &postgresDB{}
+}, WithTransient())
+
+// Named binding (singleton by default)
 err := container.Bind(func() Database {
     return &postgresDB{}
 }, WithName("primary"))
 
-// Named singleton with eager initialization
+// Named transient with eager initialization
 err := container.Bind(func() Database {
     return &postgresDB{}
-}, WithName("cache"), WithSingleton(), WithEager())
+}, WithName("cache"), WithTransient(), WithEager())
 
 // Binding with dependencies (automatically resolved)
 err := container.Bind(func(db Database, logger Logger) UserService {
@@ -111,8 +117,8 @@ err := container.Bind(func(db Database, logger Logger) UserService {
 ```
 
 **Available Options:**
-- `WithSingleton()` - Creates a singleton (same instance returned every time)
-- `WithTransient()` - Creates transient instances (new instance every time) - default
+- `WithSingleton()` - Creates a singleton (same instance returned every time) - default behavior
+- `WithTransient()` - Creates transient instances (new instance every time) - explicit override
 - `WithName(string)` - Names the binding for multiple implementations
 - `WithEager()` - Creates instance immediately during binding
 - `WithLazy()` - Creates instance only when first requested - default
@@ -137,12 +143,12 @@ err := container.ResolveNamed(&redisCache, "redis")
 
 ### Convenience Methods
 
-#### `BindSingleton(resolver interface{}, options ...BindOption) error`
+#### `BindTransient(resolver interface{}, options ...BindOption) error`
 
-Shorthand for binding a singleton.
+Shorthand for binding a transient instance (explicit override of singleton default).
 
 ```go
-err := container.BindSingleton(func() Database {
+err := container.BindTransient(func() Database {
     return &postgresDB{}
 })
 ```
@@ -157,12 +163,12 @@ err := container.BindNamed("redis", func() Cache {
 })
 ```
 
-#### `BindNamedSingleton(name string, resolver interface{}, options ...BindOption) error`
+#### `BindNamedTransient(name string, resolver interface{}, options ...BindOption) error`
 
-Shorthand for named singleton binding.
+Shorthand for named transient binding.
 
 ```go
-err := container.BindNamedSingleton("database", func() Database {
+err := container.BindNamedTransient("temp-db", func() Database {
     return &postgresDB{}
 })
 ```
@@ -190,7 +196,7 @@ container.Clear()
 ### Multiple Implementations with Named Bindings
 
 ```go
-// Bind different cache implementations
+// Bind different cache implementations (singleton by default)
 container.BindNamed("redis", func() Cache {
     return &redisCache{}
 })
@@ -205,42 +211,54 @@ err := container.ResolveNamed(&redisCache, "redis")
 
 var memoryCache Cache
 err = container.ResolveNamed(&memoryCache, "memory")
+
+// Both are singletons - same instances returned on subsequent calls
 ```
 
 ### Singleton vs Transient
 
 ```go
-// Singleton - same instance shared
-container.BindSingleton(func() Database {
+// Singleton - same instance shared (default behavior)
+container.Bind(func() Database {
     return &expensiveDB{} // Created once, reused
 })
 
-// Transient - new instance each time (default)
-container.Bind(func() RequestHandler {
+// Transient - new instance each time (explicit override)
+container.BindTransient(func() RequestHandler {
     return &handler{} // New instance per request
 })
+
+// Explicit singleton (redundant but allowed)
+container.Bind(func() Cache {
+    return &memoryCache{}
+}, WithSingleton())
 ```
 
 ### Eager vs Lazy Initialization
 
 ```go
-// Eager - create immediately during binding
+// Eager - create immediately during binding (singleton by default)
 container.Bind(func() HealthChecker {
     return &healthChecker{}
-}, WithSingleton(), WithEager())
+}, WithEager())
 
 // Lazy - create when first requested (default)
 container.Bind(func() HeavyService {
     return &heavyService{} // Only created if/when needed
-}, WithSingleton(), WithLazy())
+}) // Singleton + Lazy by default
+
+// Transient with eager initialization
+container.Bind(func() TempService {
+    return &tempService{}
+}, WithTransient(), WithEager())
 ```
 
 ### Complex Dependency Chains
 
-YADI automatically resolves complex dependency chains:
+YADI automatically resolves complex dependency chains with singleton instances:
 
 ```go
-// Service with multiple dependencies
+// Service with multiple dependencies (all singletons by default)
 container.Bind(func(
     userSvc UserService, 
     paymentSvc PaymentService,
@@ -253,9 +271,14 @@ container.Bind(func(
     }
 })
 
-// All dependencies are resolved automatically
+// All dependencies are resolved automatically and cached as singletons
 var orderSvc OrderService
 err := container.Resolve(&orderSvc)
+
+// Subsequent resolutions return the same instance
+var orderSvc2 OrderService
+err = container.Resolve(&orderSvc2)
+// orderSvc == orderSvc2 (same instance)
 ```
 
 ### Error Handling
@@ -299,11 +322,12 @@ go func() {
 
 ## Design Principles
 
-1. **Clean API**: Simple, idiomatic Go without verbose generic syntax
-2. **Type Inference**: Automatic type detection from function signatures
-3. **Performance Conscious**: Minimal runtime overhead with optimized reflection
-4. **Developer Experience**: Simple, intuitive API with clear error messages
-5. **Flexibility**: Support for complex dependency graphs and error handling
+1. **Singleton-First**: Singleton instances by default for better resource management and performance
+2. **Clean API**: Simple, idiomatic Go without verbose generic syntax
+3. **Type Inference**: Automatic type detection from function signatures
+4. **Performance Conscious**: Minimal runtime overhead with optimized reflection
+5. **Developer Experience**: Simple, intuitive API with clear error messages
+6. **Flexibility**: Support for complex dependency graphs and error handling
 
 ## Error Types
 
