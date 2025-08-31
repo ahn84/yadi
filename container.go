@@ -154,6 +154,36 @@ func (c *Container) ResolveNamed(target interface{}, name string) error {
 	return fmt.Errorf("no binding found for type %s with name '%s'", targetType.String(), name)
 }
 
+// ResolveAll returns all instances of a given type by setting the value of the provided pointer.
+// The target must be a pointer to a slice of the type you want to resolve.
+func (c *Container) ResolveAll(target interface{}) error {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	targetValue := reflect.ValueOf(target)
+	if targetValue.Kind() != reflect.Ptr || targetValue.Elem().Kind() != reflect.Slice {
+		return fmt.Errorf("target must be a pointer to a slice")
+	}
+
+	sliceType := targetValue.Elem().Type()
+	elemType := sliceType.Elem()
+
+	if bindings, exists := c.bindings[elemType]; exists {
+		instances := reflect.MakeSlice(sliceType, 0, len(bindings))
+		for _, binding := range bindings {
+			instance, err := binding.resolve(c)
+			if err != nil {
+				return err
+			}
+			instances = reflect.Append(instances, reflect.ValueOf(instance))
+		}
+		targetValue.Elem().Set(instances)
+		return nil
+	}
+
+	return nil
+}
+
 // BindTransient is a convenience method for binding a transient instance
 func (c *Container) BindTransient(resolver interface{}, options ...BindOption) error {
 	allOptions := append([]BindOption{WithTransient()}, options...)

@@ -20,6 +20,12 @@ func ResolveNamed(target interface{}, name string) error {
 	return global.ResolveNamed(target, name)
 }
 
+// ResolveAll returns all instances of a given type from the global container.
+// The target must be a pointer to a slice of the type you want to resolve.
+func ResolveAll(target interface{}) error {
+	return global.ResolveAll(target)
+}
+
 // BindTransient is a convenience method for binding a transient instance in the global container.
 func BindTransient(resolver interface{}, options ...BindOption) error {
 	return global.BindTransient(resolver, options...)
