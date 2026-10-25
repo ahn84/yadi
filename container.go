@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // BindOption represents a configuration option for binding
@@ -63,10 +65,20 @@ func As[T any]() BindOption {
 }
 
 type binding struct {
-	resolver  any        // factory function or value
-	concrete  any        // concrete type
-	singleton bool       // whether the binding is a singleton
-	mutex     sync.Mutex // protects concrete for singleton instances
+	resolver   any           // factory function or value
+	concrete   any           // concrete type
+	singleton  bool          // whether the binding is a singleton
+	mutex      sync.Mutex    // protects concrete for singleton instances
+	typ        reflect.Type  // type the binding is registered under
+	name       string        // name the binding is registered under
+	checkedGen atomic.Uint64 // container generation in which the binding was checked for cycles
+}
+
+func (b *binding) String() string {
+	if b.name == "" {
+		return b.typ.String()
+	}
+	return fmt.Sprintf("%s (%s)", b.typ.String(), b.name)
 }
 
 func (b *binding) resolve(c *Container) (any, error) {
@@ -96,8 +108,9 @@ func (b *binding) resolve(c *Container) (any, error) {
 }
 
 type Container struct {
-	bindings map[reflect.Type]map[string]*binding
-	lock     sync.RWMutex
+	bindings   map[reflect.Type]map[string]*binding
+	lock       sync.RWMutex
+	generation uint64 // incremented whenever bindings change, invalidating cycle checks
 }
 
 func New() *Container {
@@ -110,6 +123,7 @@ func (c *Container) Clear() {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	c.bindings = make(map[reflect.Type]map[string]*binding)
+	c.generation++
 }
 
 // Bind registers a factory function in the container.
@@ -155,6 +169,9 @@ func (c *Container) ResolveNamed(target interface{}, name string) error {
 	// Try to find a binding for the target type directly.
 	if bindings, exists := c.bindings[targetType]; exists {
 		if binding, exists := bindings[name]; exists {
+			if err := c.checkCycles(binding); err != nil {
+				return err
+			}
 			instance, err := binding.resolve(c)
 			if err != nil {
 				return err
@@ -170,6 +187,9 @@ func (c *Container) ResolveNamed(target interface{}, name string) error {
 		ptrType := reflect.PtrTo(targetType)
 		if bindings, exists := c.bindings[ptrType]; exists {
 			if binding, exists := bindings[name]; exists {
+				if err := c.checkCycles(binding); err != nil {
+					return err
+				}
 				instance, err := binding.resolve(c)
 				if err != nil {
 					return err
@@ -201,6 +221,9 @@ func (c *Container) ResolveAll(target interface{}) error {
 	if bindings, exists := c.bindings[elemType]; exists {
 		instances := reflect.MakeSlice(sliceType, 0, len(bindings))
 		for _, binding := range bindings {
+			if err := c.checkCycles(binding); err != nil {
+				return err
+			}
 			instance, err := binding.resolve(c)
 			if err != nil {
 				return err
@@ -245,7 +268,60 @@ func (c *Container) callResolver(function interface{}) (interface{}, error) {
 			return values[0].Interface(), err
 		}
 	}
+	// A nil interface has no dynamic type, so it can't be assigned or injected later.
+	if values[0].Kind() == reflect.Interface && values[0].IsNil() {
+		return nil, fmt.Errorf("resolver for %s returned nil", values[0].Type().String())
+	}
 	return values[0].Interface(), nil
+}
+
+// checkCycles returns an error if resolving b would run into a circular dependency.
+// It walks the dependency graph before any binding is locked, because a cycle between
+// singletons would otherwise deadlock on their mutexes. The result is cached until the
+// bindings change. The caller must hold c.lock.
+func (c *Container) checkCycles(b *binding) error {
+	if b.checkedGen.Load() == c.generation {
+		return nil
+	}
+	if err := c.visit(b, nil, make(map[*binding]bool)); err != nil {
+		return err
+	}
+	b.checkedGen.Store(c.generation)
+	return nil
+}
+
+// visit walks the bindings b depends on, skipping Lazy arguments, which break cycles.
+// Missing dependencies are skipped here and reported when resolving.
+func (c *Container) visit(b *binding, path []*binding, done map[*binding]bool) error {
+	for i, p := range path {
+		if p == b {
+			names := make([]string, 0, len(path)-i+1)
+			for _, p := range append(path[i:], b) {
+				names = append(names, p.String())
+			}
+			return fmt.Errorf("circular dependency detected: %s", strings.Join(names, " -> "))
+		}
+	}
+	if done[b] {
+		return nil
+	}
+
+	path = append(path, b)
+	refFunc := reflect.TypeOf(b.resolver)
+	for i := 0; i < refFunc.NumIn(); i++ {
+		argType := refFunc.In(i)
+		if isLazy(argType) {
+			continue
+		}
+		if dep, exist := c.bindings[argType][""]; exist {
+			if err := c.visit(dep, path, done); err != nil {
+				return err
+			}
+		}
+	}
+
+	done[b] = true
+	return nil
 }
 
 // arguments returns the list of resolved arguments for a function.
@@ -303,24 +379,29 @@ func (c *Container) bind(resolver interface{}, name string, isSingleton bool, is
 		bindType = as
 	}
 
-	var concrete interface{}
+	// Bump first so the new binding's zero checkedGen never matches and it is checked.
+	c.generation++
+	newBinding := &binding{resolver: resolver, singleton: isSingleton, typ: bindType, name: name}
+
 	if !isLazy {
-		var err error
-		concrete, err = c.callResolver(resolver)
+		if err := c.checkCycles(newBinding); err != nil {
+			return err
+		}
+		concrete, err := c.callResolver(resolver)
 		if err != nil {
 			return err
+		}
+		if isSingleton {
+			newBinding.concrete = concrete
 		}
 	}
 
 	if _, exist := c.bindings[bindType]; !exist {
 		c.bindings[bindType] = make(map[string]*binding)
 	}
-
-	if isSingleton {
-		c.bindings[bindType][name] = &binding{resolver: resolver, concrete: concrete, singleton: isSingleton}
-	} else {
-		c.bindings[bindType][name] = &binding{resolver: resolver, singleton: isSingleton}
-	}
+	c.bindings[bindType][name] = newBinding
+	// Registering can close a cycle, so invalidate the checks made against the old graph.
+	c.generation++
 
 	return nil
 }
