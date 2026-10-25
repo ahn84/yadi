@@ -25,33 +25,32 @@ func (c *SimpleCounter) Count() int {
 
 func main() {
 	// Singleton by default
-	yadi.Bind(func() Counter {
+	di.Bind(func() Counter {
 		return &SimpleCounter{}
 	})
 
 	// Transient
-	yadi.BindNamedTransient("transient", func() Counter {
+	di.BindNamedTransient("transient", func() Counter {
 		return &SimpleCounter{}
 	})
 
 	var c1 Counter
-	yadi.Resolve(&c1)
+	di.Resolve(&c1)
 	c1.Increment()
 	fmt.Printf("Singleton counter 1: %d\n", c1.Count())
 
 	var c2 Counter
-	yadi.Resolve(&c2)
+	di.Resolve(&c2)
 	c2.Increment()
 	fmt.Printf("Singleton counter 2: %d\n", c2.Count())
 
 	var tc1 Counter
-	yadi.ResolveNamed(&tc1, "transient")
+	di.ResolveNamed(&tc1, "transient")
 	tc1.Increment()
 	fmt.Printf("Transient counter 1: %d\n", tc1.Count())
 
 	var tc2 Counter
-	yadi.ResolveNamed(&tc2, "transient")
+	di.ResolveNamed(&tc2, "transient")
 	tc2.Increment()
 	fmt.Printf("Transient counter 2: %d\n", tc2.Count())
 }
-

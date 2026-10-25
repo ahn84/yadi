@@ -56,17 +56,17 @@ func (u *userService) GetUser(id int) string {
 
 func main() {
 	// Bind dependencies using the global container
-	yadi.Bind(func() Database {
+	di.Bind(func() Database {
 		return &postgresDB{}
 	})
 
-	yadi.Bind(func(db Database) UserService {
+	di.Bind(func(db Database) UserService {
 		return &userService{db: db}
 	})
 
 	// Resolve using pointer
 	var userSvc UserService
-	err := yadi.Resolve(&userSvc)
+	err := di.Resolve(&userSvc)
 	if err != nil {
 		panic(err)
 	}
@@ -92,6 +92,24 @@ Registers a factory function. The return type is automatically detected from the
 - `WithTransient()`: Creates transient instances (new instance every time).
 - `WithName(string)`: Names the binding for multiple implementations.
 - `WithEager()`: Creates instance immediately during binding.
+- `As[T]()`: Binds the resolver under type `T` (typically an interface) instead of its return type.
+
+### Binding Constructors as Interfaces
+
+Constructors in Go usually return concrete types. Use `As[T]()` (or the `BindAs[T]` shorthand) to register them under an interface they implement:
+
+```go
+func NewPostgresDB() *postgresDB { return &postgresDB{} }
+
+di.Bind(NewPostgresDB, di.As[Database]())
+// or
+di.BindAs[Database](NewPostgresDB)
+
+var db Database
+di.Resolve(&db) // *postgresDB
+```
+
+Binding fails if the constructor's return type does not implement `T`. `As[T]()` can be combined with any other option, such as `WithName`, `WithTransient`, or `WithEager`.
 
 #### `Resolve(target interface{}) error`
 
@@ -136,6 +154,7 @@ serviceB, err := serviceA.ServiceB.Resolve()
 
 ### Convenience Methods
 
+- `BindAs[T any](resolver interface{}, options ...BindOption) error` (global container)
 - `BindTransient(resolver interface{}, options ...BindOption) error`
 - `BindNamed(name string, resolver interface{}, options ...BindOption) error`
 - `BindNamedTransient(name string, resolver interface{}, options ...BindOption) error`
@@ -153,6 +172,7 @@ serviceB, err := serviceA.ServiceB.Resolve()
 - [Eager Initialization](./examples/eager)
 - [Resolve All](./examples/resolveall)
 - [Lazy Resolution (Circular Dependencies)](./examples/lazy)
+- [Binding Constructors as Interfaces](./examples/bindas)
 
 ## Design Principles
 

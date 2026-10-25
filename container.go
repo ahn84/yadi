@@ -15,6 +15,7 @@ type bindConfig struct {
 	name      string
 	singleton bool
 	lazy      bool
+	as        reflect.Type
 }
 
 // WithName sets a name for the binding, allowing multiple implementations of the same interface
@@ -49,6 +50,15 @@ func WithLazy() BindOption {
 func WithEager() BindOption {
 	return func(config *bindConfig) {
 		config.lazy = false
+	}
+}
+
+// As binds the resolver under type T instead of the resolver's return type.
+// This allows a constructor returning a concrete type to be bound as an interface it implements,
+// e.g. Bind(NewPostgresDB, As[Database]()).
+func As[T any]() BindOption {
+	return func(config *bindConfig) {
+		config.as = reflect.TypeOf((*T)(nil)).Elem()
 	}
 }
 
@@ -120,7 +130,7 @@ func (c *Container) Bind(resolver interface{}, options ...BindOption) error {
 		option(config)
 	}
 
-	return c.bind(resolver, config.name, config.singleton, config.lazy)
+	return c.bind(resolver, config.name, config.singleton, config.lazy, config.as)
 }
 
 // Resolve returns an instance by setting the value of the provided pointer.
@@ -269,20 +279,28 @@ func (c *Container) resolveArguments(function interface{}) ([]reflect.Value, err
 }
 
 // bind maps an abstraction to concrete and instantiates if it is a singleton binding.
-func (c *Container) bind(resolver interface{}, name string, isSingleton bool, isLazy bool) error {
+// If as is not nil, the binding is registered under as instead of the resolver's return type.
+func (c *Container) bind(resolver interface{}, name string, isSingleton bool, isLazy bool, as reflect.Type) error {
 	reflectedResolver := reflect.TypeOf(resolver)
-	if reflectedResolver.Kind() != reflect.Func {
+	if reflectedResolver == nil || reflectedResolver.Kind() != reflect.Func {
 		return errors.New("container: the resolver must be a function")
-	}
-
-	if reflectedResolver.NumOut() > 0 {
-		if _, exist := c.bindings[reflectedResolver.Out(0)]; !exist {
-			c.bindings[reflectedResolver.Out(0)] = make(map[string]*binding)
-		}
 	}
 
 	if err := c.validateResolverFunction(reflectedResolver); err != nil {
 		return err
+	}
+
+	bindType := reflectedResolver.Out(0)
+	if as != nil {
+		if !bindType.AssignableTo(as) {
+			return fmt.Errorf("container: %s is not assignable to %s", bindType.String(), as.String())
+		}
+		for i := 0; i < reflectedResolver.NumIn(); i++ {
+			if reflectedResolver.In(i) == as {
+				return fmt.Errorf("can't depend on bound type")
+			}
+		}
+		bindType = as
 	}
 
 	var concrete interface{}
@@ -294,10 +312,14 @@ func (c *Container) bind(resolver interface{}, name string, isSingleton bool, is
 		}
 	}
 
+	if _, exist := c.bindings[bindType]; !exist {
+		c.bindings[bindType] = make(map[string]*binding)
+	}
+
 	if isSingleton {
-		c.bindings[reflectedResolver.Out(0)][name] = &binding{resolver: resolver, concrete: concrete, singleton: isSingleton}
+		c.bindings[bindType][name] = &binding{resolver: resolver, concrete: concrete, singleton: isSingleton}
 	} else {
-		c.bindings[reflectedResolver.Out(0)][name] = &binding{resolver: resolver, singleton: isSingleton}
+		c.bindings[bindType][name] = &binding{resolver: resolver, singleton: isSingleton}
 	}
 
 	return nil

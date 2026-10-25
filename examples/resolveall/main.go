@@ -23,15 +23,15 @@ func (s *ServiceB) Initialize() {
 }
 
 func main() {
-	yadi.Bind(func() Initializable {
+	di.Bind(func() Initializable {
 		return &ServiceA{}
 	})
-	yadi.BindNamed("b", func() Initializable {
+	di.BindNamed("b", func() Initializable {
 		return &ServiceB{}
 	})
 
 	var services []Initializable
-	yadi.ResolveAll(&services)
+	di.ResolveAll(&services)
 
 	for _, s := range services {
 		s.Initialize()

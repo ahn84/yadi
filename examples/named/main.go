@@ -23,18 +23,18 @@ func (m *SmsMessenger) Send(message string) {
 }
 
 func main() {
-	yadi.BindNamed("email", func() Messenger {
+	di.BindNamed("email", func() Messenger {
 		return &EmailMessenger{}
 	})
-	yadi.BindNamed("sms", func() Messenger {
+	di.BindNamed("sms", func() Messenger {
 		return &SmsMessenger{}
 	})
 
 	var emailMessenger Messenger
-	yadi.ResolveNamed(&emailMessenger, "email")
+	di.ResolveNamed(&emailMessenger, "email")
 	emailMessenger.Send("Hello from email!")
 
 	var smsMessenger Messenger
-	yadi.ResolveNamed(&smsMessenger, "sms")
+	di.ResolveNamed(&smsMessenger, "sms")
 	smsMessenger.Send("Hello from SMS!")
 }

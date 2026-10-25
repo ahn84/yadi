@@ -8,14 +8,14 @@ import (
 
 func main() {
 	fmt.Println("Binding eagerly...")
-	yadi.Bind(func() string {
+	di.Bind(func() string {
 		fmt.Println("String constructor called")
 		return "Hello, Eager!"
-	}, yadi.WithEager())
+	}, di.WithEager())
 	fmt.Println("Binding done.")
 
 	fmt.Println("Resolving...")
 	var s string
-	yadi.Resolve(&s)
+	di.Resolve(&s)
 	fmt.Println("Resolved:", s)
 }

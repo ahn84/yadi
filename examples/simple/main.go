@@ -17,12 +17,12 @@ func (g *SimpleGreeter) Greet() string {
 }
 
 func main() {
-	yadi.Bind(func() Greeter {
+	di.Bind(func() Greeter {
 		return &SimpleGreeter{}
 	})
 
 	var greeter Greeter
-	yadi.Resolve(&greeter)
+	di.Resolve(&greeter)
 
 	fmt.Println(greeter.Greet())
 }

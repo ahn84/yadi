@@ -8,6 +8,12 @@ func Bind(resolver interface{}, options ...BindOption) error {
 	return global.Bind(resolver, options...)
 }
 
+// BindAs registers a factory function in the global container under type T instead of its return type.
+// It is a shorthand for Bind(resolver, append(options, As[T]())...).
+func BindAs[T any](resolver interface{}, options ...BindOption) error {
+	return global.Bind(resolver, append(options, As[T]())...)
+}
+
 // Resolve returns an instance from the global container by setting the value of the provided pointer.
 // The target must be a pointer to the type you want to resolve.
 func Resolve(target interface{}) error {

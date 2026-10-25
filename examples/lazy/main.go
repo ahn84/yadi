@@ -7,7 +7,7 @@ import (
 )
 
 type Service1 struct {
-	Service2 yadi.Lazy[Service2]
+	Service2 di.Lazy[Service2]
 }
 
 func (s *Service1) Do() {
@@ -25,15 +25,15 @@ func (s *Service2) Do() {
 }
 
 func main() {
-	yadi.Bind(func(s2 yadi.Lazy[Service2]) *Service1 {
+	di.Bind(func(s2 di.Lazy[Service2]) *Service1 {
 		return &Service1{Service2: s2}
 	})
-	yadi.Bind(func(s1 *Service1) *Service2 {
+	di.Bind(func(s1 *Service1) *Service2 {
 		return &Service2{Service1: s1}
 	})
 
 	var s1 *Service1
-	yadi.Resolve(&s1)
+	di.Resolve(&s1)
 
 	s1.Do()
 }
